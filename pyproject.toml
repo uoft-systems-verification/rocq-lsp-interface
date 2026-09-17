@@ -1,0 +1,29 @@
+[project]
+name = "rocq-lsp-mcp"
+version = "0.1.0"
+description = "Rocq Theorem Prover MCP, mirroring lean-lsp-mcp"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "mcp[cli]>=1.21.2,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.2.0",
+]
+
+[tool.setuptools]
+packages = ["rocq_lsp_mcp"]
+package-dir = {"" = "src"}
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+rocq-lsp = "rocq_lsp_mcp.cli:main"
+rocq-lsp-daemon = "rocq_lsp_mcp.daemon:main"
+rocq-lsp-mcp = "rocq_lsp_mcp:main"
