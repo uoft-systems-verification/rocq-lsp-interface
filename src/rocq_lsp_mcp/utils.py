@@ -180,6 +180,32 @@ def _format_goal(goal: Dict, index: int, total: int) -> str:
     return "\n".join(lines)
 
 
+def format_unsolved_goals(view: Optional[Dict]) -> str:
+    """Render unsolved goals for diagnostics, excluding unfocused goals."""
+    state = (view or {}).get("pp_proof") or (view or {}).get("proof") or {}
+    goals = state.get("goals") or []
+    parts = [_format_goal(goal, i, len(goals)) for i, goal in enumerate(goals)]
+    shown_ids = {goal["id"] for goal in goals if goal.get("id") is not None}
+    for label, key in (
+        ("Shelved", "shelvedGoals"),
+        ("Given up", "givenUpGoals"),
+    ):
+        extra = []
+        for goal in state.get(key) or []:
+            goal_id = goal.get("id")
+            if goal_id is not None:
+                if goal_id in shown_ids:
+                    continue
+                shown_ids.add(goal_id)
+            extra.append(goal)
+        if extra:
+            rendered = "\n\n".join(
+                _format_goal(goal, i, len(extra)) for i, goal in enumerate(extra)
+            )
+            parts.append(f"{label} goals:\n{rendered}")
+    return "\n\n".join(parts)
+
+
 def format_proof_view(view: Optional[Dict], default: str = "No goals here.") -> str:
     """Render a `prover/proofView` payload as text.
 

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from rocq_lsp_mcp.file_utils import find_project_file, get_file_contents
-from rocq_lsp_mcp.rocq_client import RocqLSPError
+from rocq_lsp_mcp.rocq_client import RocqLSPClient, RocqLSPError
 from rocq_lsp_mcp.search_utils import check_ripgrep_status
 from rocq_lsp_mcp.search_utils import rocq_local_search as _ripgrep_declarations
 from rocq_lsp_mcp.utils import (
@@ -23,6 +23,7 @@ from rocq_lsp_mcp.utils import (
     format_diagnostics,
     format_line,
     format_proof_view,
+    format_unsolved_goals,
 )
 from rocq_lsp_mcp.workspace import Workspace
 
@@ -56,13 +57,46 @@ def goal(ws: Workspace, file_path: str, line: int, column: Optional[int] = None)
 
 
 def diagnostics(ws: Workspace, file_path: str) -> str:
-    """Check a whole file and report its errors and warnings."""
+    """Check a whole file and report diagnostics with goals at each error."""
     client, rel_path, _ = ws.open(file_path)
     reported = client.check_file(rel_path)
-    found = format_diagnostics(reported, content=client.get_file_content(rel_path))
+    found = _diagnostics_with_goals(client, rel_path, reported)
     if not found:
         return "No diagnostics; the file checks cleanly."
     return f"{_count_diagnostics(reported)} in {rel_path}:\n\n" + "\n\n".join(found)
+
+
+def _diagnostics_with_goals(
+    client: RocqLSPClient, rel_path: str, reported: List[dict],
+) -> List[str]:
+    """Keep each original diagnostic and attach the proof state at its error.
+
+    The end-of-file proof view can be empty even after a tactic failure. Visit
+    the error's position instead, reusing the already checked prefix.
+    """
+    formatted = format_diagnostics(reported, content=client.get_file_content(rel_path))
+    states = {}
+    for index, diagnostic in enumerate(reported):
+        if diagnostic.get("severity") != 1:
+            continue
+        rng = diagnostic.get("range") or {}
+        position = rng.get("end") or rng.get("start") or {}
+        remaining = ""
+        unavailable = "No proof goals available at this error."
+        if "line" in position and "character" in position:
+            key = (position["line"], position["character"])
+            if key not in states:
+                try:
+                    view = client.goals_at(rel_path, *key)
+                    states[key] = (format_unsolved_goals(view), unavailable)
+                except RocqLSPError as exc:
+                    # A goal lookup must not hide the original error.
+                    states[key] = ("", f"Proof goals unavailable: {exc}")
+            remaining, unavailable = states[key]
+        formatted[index] += "\n\n" + (
+            f"Unsolved goals:\n{remaining}" if remaining else unavailable
+        )
+    return formatted
 
 
 def _count_diagnostics(diagnostics: List[dict]) -> str:

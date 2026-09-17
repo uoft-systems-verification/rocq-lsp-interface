@@ -15,7 +15,6 @@ import pytest
 
 from rocq_lsp_mcp.cli import parse_location
 
-
 # --- location parsing (no prover needed) ------------------------------------
 
 
@@ -83,6 +82,17 @@ def test_goal_reports_a_finished_proof(cli, demo):
     assert "No goals" in out.split("--- after ---")[1]
 
 
+def test_goal_keeps_the_original_unfocused_summary(cli, tmp_path):
+    path = tmp_path / "Focused.v"
+    path.write_text("Lemma pending : True /\\ 1 = 1.\nProof.\n  split.\n  - idtac.\nQed.\n")
+    out = cli("goal", f"{path}:4")
+    after = out.split("--- after ---")[1]
+    assert "⊢ True" in after
+    assert "(1 unfocused goal(s))" in after
+    assert "⊢ 1 = 1" not in after
+    assert "Unsolved goals:" not in out
+
+
 def test_suggest_ranks_the_closing_lemma_first(cli, demo):
     out = cli("suggest", f"{demo}:13", "--max", "5")
     assert out.splitlines()[1] == "app_nil_r"
@@ -113,6 +123,7 @@ def test_diagnostics_clean_and_broken(cli, demo, test_project_path):
     assert "checks cleanly" in cli("diagnostics", demo)
     broken = cli("diagnostics", str(test_project_path / "broken.v"))
     assert "Unable to unify" in broken
+    assert "Unsolved goals:\n⊢ two = 3" in broken
 
 
 def test_diagnostics_rechecks_a_changed_proof(cli, tmp_path):
@@ -147,6 +158,7 @@ def test_run_code_checks_a_snippet(cli, demo):
     assert "cleanly" in cli("run-code", "--code", "Definition n := 1.\n")
     bad = cli("run-code", "--code", "Lemma b : 1 = 2. Proof. reflexivity. Qed.\n")
     assert "Unable to unify" in bad
+    assert "Unsolved goals:" not in bad
 
 
 def test_status_and_close(cli, demo):

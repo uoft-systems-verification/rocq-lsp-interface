@@ -64,6 +64,45 @@ async def test_broken_file_reports_the_error(mcp_client_factory, test_project_pa
         text = await client.text("rocq_diagnostic_messages", {"file_path": broken})
         assert "error" in text.lower()
         assert "Unable to unify" in text
+        assert "Unsolved goals:\n⊢ two = 3" in text
+
+
+@pytest.mark.parametrize("code, expected", [
+    ("Lemma wrong : forall n : nat, n = 3. Proof. intros n. reflexivity. Qed.\n",
+     ["Unable to unify", "n : nat", "⊢ n = 3"]),
+    ("Lemma wrong : True /\\ True. Proof. split. Qed.\n",
+     ["incomplete proof", "goal 1 of 2", "goal 2 of 2", "⊢ True"]),
+    ("Lemma wrong : True. Proof. shelve. Qed.\n",
+     ["incomplete proof", "Shelved goals:", "⊢ True"]),
+    ("Lemma wrong : True /\\ 1 = 1. Proof. split. - idtac. Qed.\n",
+     ["incomplete proof", "⊢ True"]),
+], ids=["hypotheses", "multiple-goals", "shelved", "unfocused"])
+async def test_errors_show_remaining_goals(mcp_client_factory, tmp_path, code, expected):
+    path = tmp_path / "Unsolved.v"
+    path.write_text(code)
+    async with mcp_client_factory() as client:
+        text = await client.text("rocq_diagnostic_messages", {"file_path": str(path)})
+        assert "Unsolved goals:" in text
+        for part in expected:
+            assert part in text
+        assert "proof is complete" not in text
+        assert "Unfocused goals:" not in text
+        assert "⊢ 1 = 1" not in text
+
+
+async def test_error_without_proof_does_not_show_previous_goals(mcp_client_factory, tmp_path):
+    proof = tmp_path / "Proof.v"
+    proof.write_text("Lemma wrong : 1 = 2. Proof. reflexivity. Qed.\n")
+    syntax = tmp_path / "Syntax.v"
+    syntax.write_text("Definition bad := .\n")
+    async with mcp_client_factory() as client:
+        previous = await client.text("rocq_diagnostic_messages", {"file_path": str(proof)})
+        assert "⊢ 1 = 2" in previous
+        text = await client.text("rocq_diagnostic_messages", {"file_path": str(syntax)})
+        assert "Syntax error" in text
+        assert "No proof goals available at this error." in text
+        assert "⊢" not in text
+        assert "proof is complete" not in text
 
 
 async def test_diagnostics_rechecks_a_changed_proof(mcp_client_factory, tmp_path):
@@ -212,6 +251,7 @@ async def test_run_code_checks_a_snippet(mcp_client_factory):
             "rocq_run_code", {"code": "Lemma bad : 1 = 2. Proof. reflexivity. Qed.\n"}
         )
         assert "Unable to unify" in bad
+        assert "Unsolved goals:" not in bad
 
 
 async def test_local_search_finds_project_declarations(mcp_client_factory, demo):

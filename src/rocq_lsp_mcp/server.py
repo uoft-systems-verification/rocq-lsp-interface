@@ -7,9 +7,9 @@ Most agents should prefer the CLI, which needs no client configuration.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import List, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -76,7 +76,7 @@ def rocq_goal(
 
 @mcp.tool("rocq_diagnostic_messages")
 def rocq_diagnostic_messages(ctx: Context, file_path: str) -> str:
-    """Check a whole file and return its errors and warnings.
+    """Check a whole file and return errors, warnings, and unsolved goals at errors.
 
     The first call on a file costs a full compile. Prefer `rocq_goal` while
     iterating on one proof.

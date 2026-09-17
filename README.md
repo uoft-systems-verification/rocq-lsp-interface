@@ -19,6 +19,10 @@ deleted, or replaced. Inspecting the states before and after an edited tactic
 does not require replaying the file from the beginning. Whole-file diagnostics
 retain the stricter fallback for a stale cached `Qed`.
 
+Errors from `diagnostics` include unsolved goals at the error, with their
+hypotheses and conclusions, excluding unfocused goals. If no proof state is
+available, the error says so. The MCP diagnostic tool provides the same output.
+
 Starting and ending that session are their own commands. Working commands never
 start or stop one, so nothing is left running behind your back.
 
