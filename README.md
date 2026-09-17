@@ -8,8 +8,11 @@ tactics in a Rocq development. A mirror of
 [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp), exposed as a CLI first and
 as an MCP server second.
 
-A background session keeps the prover warm between commands. Only the first check
-of a file costs a full compile; everything after that is fast.
+A background session keeps the prover warm between commands. Unchanged files and
+edits the prover correctly invalidates reuse its state. If an edit is skipped by
+VsRocq's proof cache, the client restarts the prover and checks the current text
+from scratch. This also drops the project's other cached documents; they reopen
+on their next use.
 
 Starting and ending that session are their own commands. Working commands never
 start or stop one, so nothing is left running behind your back.

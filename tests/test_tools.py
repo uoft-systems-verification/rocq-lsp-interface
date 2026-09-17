@@ -66,6 +66,19 @@ async def test_broken_file_reports_the_error(mcp_client_factory, test_project_pa
         assert "Unable to unify" in text
 
 
+async def test_diagnostics_rechecks_a_changed_proof(mcp_client_factory, tmp_path):
+    path = tmp_path / "Changed.v"
+    good = "Lemma one : 1 = 1. Proof. reflexivity. Qed.\n"
+    path.write_text(good)
+    async with mcp_client_factory() as client:
+        args = {"file_path": str(path)}
+        assert "checks cleanly" in await client.text("rocq_diagnostic_messages", args)
+        path.write_text(good.replace("reflexivity.", "discriminate."))
+        assert "No applicable tactic" in await client.text("rocq_diagnostic_messages", args)
+        path.write_text(good)
+        assert "checks cleanly" in await client.text("rocq_diagnostic_messages", args)
+
+
 async def test_goal_shows_state_before_and_after_a_tactic(mcp_client_factory, demo):
     """Line 13 is `intros l.`, so the goal gains `l` across it."""
     async with mcp_client_factory() as client:

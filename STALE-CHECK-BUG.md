@@ -1,7 +1,8 @@
 # A file edited from correct to incorrect keeps reporting "checks cleanly"
 
-Status: **confirmed, not yet fixed.** Root cause identified and isolated to
-VsRocq, not to this project's own logic.
+Status: **fixed in the client by restarting and retrying stale checks.** The
+underlying incremental invalidation bug is in VsRocq. The observations below
+describe the original failure.
 
 This is the worst kind of failure, because the wrong answer is the reassuring
 one. A proof that no longer holds is reported as clean, and an agent relying on
@@ -35,24 +36,34 @@ Measured one edit kind at a time, each starting from a clean check:
 | A sentence **inserted** into a proof body | yes |
 | A tactic inside a proof body, changed in place | **no** |
 | A one-line `Proof. … Qed.`, changed in place | **no** |
-| A sentence **deleted** from a proof body | **no** |
+| A sentence **deleted** from a proof body | varies with sentence alignment |
 | Text deleted mid-sentence in a proof body (what `break.sh proof` does) | **no** |
 
-Everything outside a proof body is handled. Changes *within* a `Proof … Qed`
-block are unreliable, and the unreliable cases are exactly what proof repair
-consists of.
+These were the original observations. The source investigation below explains
+the dependence on opaque proof boundaries and sentence alignment. In particular,
+deleting the final tactic in the small example does invalidate its `Qed`.
 
 ## Root cause
 
-After `textDocument/didChange`, vsrocqtop updates the text it holds but keeps
-the affected proof's sentences marked as already executed.
+After `textDocument/didChange`, vsrocqtop can invalidate the changed tactic but
+retain the successful cached **`Qed`**. The distinction matters: it is not simply
+failing to notice the tactic edit.
 
 Confirmed directly by asking the server for its own view with
 `prover/documentState` after the edit:
 
 - the server's document contains the **new** text, so the edit was received and
   applied correctly;
-- its sentences are still listed as `(executed)`.
+- the changed tactic has a new ID and is `(not executed)`;
+- the unchanged `Qed` retains its ID and is `(executed)`.
+
+For example, after replacing `reflexivity.` with `idtac.` and interpreting to the
+end, the raw server reports:
+
+```text
+[8] [idtac--.] (60 -> 66) (not executed)
+[7] [Qed--.]   (67 -> 71) (executed)
+```
 
 `prover/interpretToEnd` therefore finds no work to do. The message trace shows
 it returning a `proofView` 2 ms later with no execution in between, and nothing
@@ -71,11 +82,7 @@ edit. The client is reading the server correctly; the server's answer is wrong.
 Manual mode never re-triggers execution afterwards, so the staleness is
 permanent for that document, which is why repeating the command does not help.
 
-The most likely mechanism is VsRocq's scheduling of `Proof … Qed` as a single
-opaque block keyed by its opening statement: change the statement and the block
-is invalidated, change only its interior and it is not. This matches every row
-of the table except the deletion case, so the precise rule is not fully pinned
-down.
+The source-level mechanism is now confirmed; see the investigation below.
 
 ## What does not fix it
 
@@ -94,18 +101,24 @@ Each tried against the same reproduction:
 `resetRocq` is the only protocol operation that clears the stale state, and it
 is not safe to rely on.
 
-## The fix that will work
+## Implemented fix
 
-Replace the server process for the document and check again. That is the only
-way to be certain the answer describes the file on disk.
+Replace the server process for the document and check again. This is the current
+client's conservative fallback. A server-side invalidation change can preserve
+incrementality, as the experiment below demonstrates.
 
 Doing that on every edit would cost a full check each time, which is the whole
 speedup. The intended design is to pay it only when needed:
 
-1. Count real execution activity during a check, meaning `updateHighlights`
-   with a non-empty processing or prepared range.
-2. If the file changed since the last check and **no** execution activity was
-   seen, the answer is stale by definition.
+1. Track the pending edited span in the new document's UTF-16 coordinates,
+   retaining the baseline across multiple edits before a check.
+2. Require `updateHighlights` for that document with a processing or prepared
+   range covering the edited span. Activity elsewhere is insufficient: changing
+   `reflexivity.` to `discriminate.` and appending a definition was reproduced
+   returning clean with activity only for the new definition. A check without
+   coverage is treated as potentially stale, including partial goal requests.
+   A successful point check keeps the edit pending: executing the changed tactic
+   does not establish that its cached `Qed` has been revalidated.
 3. In that case restart the prover, reopen the document and check again.
 
 Statement and definition edits keep the fast path, because the server really
@@ -113,9 +126,119 @@ does re-execute for those. Proof-body edits fall back to a cold check, which is
 what correctness costs here. On `Combine.v` a cold check is 6.5 s, against 0.0 s
 for the stale answer and 6.5 s for `rocq compile`.
 
-Scaffolding for this is in `rocq_client.py` already: an `_executions` counter, a
-`dirty` flag per document, and a `_restart` method. None of it is wired into the
-check path yet, so current behaviour is unchanged and the 38 tests still pass.
+Both `check_file` and `goals_at` use the shared `_interpret` path. Recovery retries
+once, preserving the latest in-memory text (including temporary tactic attempts),
+the requested position and timeout. The replacement clears all server caches;
+the old reader is bound to its own queue so it cannot poison the new process.
+Other documents reopen on demand through `Workspace.open`.
+
+The fallback is deliberately conservative: whitespace/comment edits or goal
+requests before the edited span can also trigger a restart. Empty documents are
+handled without waiting for a proof view. Recovery failures propagate as errors.
+
+Regression tests cover proof edits, mixed edits with unrelated activity, multiple
+pending edits, partial goals, error-to-clean recovery, deletion of all code,
+the incremental fast path, and both CLI and MCP disk-edit workflows. Protocol
+tests also cover unrelated document notifications and failed recovery.
+
+## Source investigation (2026-09-17)
+
+Compared the installed VsRocq **2.4.3** with its release source at
+`6d1a104777972657be05f0af300b747ace3f94bf`. Also inspected main at
+`fcefb902ba6dcf7a479b6c0f685dd128e4c60684`; main was not built or runtime-tested.
+
+### Why the cache behaves this way
+
+VsRocq distinguishes a theorem's exported state from the steps constructing its
+opaque proof. This permits reuse after an opaque proof without replaying its
+body, and supports proof skipping/delegation. In
+[`scheduler.ml`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/language-server/dm/scheduler.ml#L178-L201),
+an `OpaqueProof` task is based on the proof opener after popping the proof block.
+Only this base contributes an invalidation dependency. The internal tactics do
+not contribute dependencies to `Qed`.
+
+This exclusion is explicit in the upstream
+[`document: invalidate proof` test](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/language-server/tests/d_tests.ml#L55-L75):
+it asserts that changing a proof step does **not** make `Qed` a dependent.
+Retaining the exported state is an optimization; failing to separately recheck
+the changed proof is the correctness gap for a whole-document verification tool.
+
+The remaining pieces explain the observed behavior:
+
+- [`document.ml`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/language-server/dm/document.ml#L525-L586)
+  compares sentences positionally by token list. Equal sentences retain their
+  IDs and cached checking results, including an unchanged `Qed`.
+- [`documentManager.ml`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/language-server/dm/documentManager.ml#L289-L302)
+  invalidates changed sentence IDs and their dependents in the old schedule.
+- [`build_tasks_for`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/language-server/dm/executionManager.ml#L493-L516)
+  stops immediately on a cached successful state. Asking for the state at `Qed`
+  therefore need not traverse the changed tactic.
+- Inserting/deleting a sentence can shift the positional comparison, causing
+  `Qed` to receive a new ID and be checked again. This explains why insertion
+  benchmarks can pass while replacement fails; deletion is not uniformly broken.
+- `Defined` uses the ordinary dependency chain instead of the opaque-proof path.
+  The same tactic replacement under `Defined` correctly reports an unfinished
+  proof in the unmodified server.
+
+The relevant dependency exclusion, cache shortcut, and test remain in the
+inspected main revision. This is source evidence, not a runtime claim about main.
+
+### What the VS Code extension does
+
+The extension's default settings match ours for the relevant options: Manual,
+delegation `None`, and block-on-error enabled. Its
+[`manualChecking.ts`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/client/src/manualChecking.ts#L17-L35)
+sends the same `interpretToPoint`, `interpretToEnd`, and stepping notifications.
+There is no additional cache invalidation in those commands. In Continuous mode,
+[`selection changes`](https://github.com/rocq-prover/vsrocq/blob/v2.4.3/client/src/extension.ts#L353-L361)
+also send `interpretToPoint`; server-side background checking uses the same
+end-of-document scheduling mechanism.
+
+Direct protocol experiments explain how interactive use can conceal the problem:
+visiting the edited tactic explicitly executes it, so `discriminate.` reports its
+error. But replacing `reflexivity.` with **`idtac.`**, visiting that tactic, and
+then interpreting to the end still reports no errors in the unmodified server.
+The tactic succeeds with a remaining goal; the old successful `Qed` hides the
+unfinished proof. The VS Code UI itself was not automated in this investigation.
+
+This also exposed and fixed a gap in our first recovery implementation: point
+checks no longer clear a pending edit before whole-document validation.
+
+### Experimental incremental server repair
+
+The [experimental patch](investigations/vsrocq-2.4.3-invalidation.patch) adds
+invalidation edges from each opaque proof step to its terminator, while leaving
+the execution base unchanged. A local build, with client recovery bypassed,
+correctly handles failing tactics, unfinished proofs, point-then-end checks,
+mixed edits, deletion, and restoration without restarting its process.
+
+An execution trace confirms that the prefix is reused:
+
+```text
+Invalidating: 6                         # old tactic
+Invalidating: 7                         # Qed
+Non (locally) computed state 7
+Reached computed state 3               # cached lemma opener / preceding context
+skipping execution of already executed 4  # Proof
+skipping execution of already executed 5  # simpl
+```
+
+This patch is **experimental, not installed**. It invalidates downstream
+dependents too, and fails the upstream test explicitly requiring `Qed` to remain
+outside the dependency set. The remaining upstream tests pass with local socket
+access. A design preserving the full opaque-proof optimization should separate
+cached exported state from proof-validation status and ensure dirty proofs are
+checked even when the end state is cached. Merely switching to cursor requests
+does not solve the unfinished-proof case.
+
+The [protocol probe](investigations/vsrocq_stale_probe.py) reproduces the findings:
+
+```sh
+.venv/bin/python investigations/vsrocq_stale_probe.py
+.venv/bin/python investigations/vsrocq_stale_probe.py --expect-fixed /path/to/patched/vsrocqtop
+```
+
+The probe deliberately bypasses our recovery path to test server behavior.
 
 ## Scope
 

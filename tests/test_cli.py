@@ -115,6 +115,17 @@ def test_diagnostics_clean_and_broken(cli, demo, test_project_path):
     assert "Unable to unify" in broken
 
 
+def test_diagnostics_rechecks_a_changed_proof(cli, tmp_path):
+    path = tmp_path / "Changed.v"
+    good = "Lemma one : 1 = 1. Proof. reflexivity. Qed.\n"
+    path.write_text(good)
+    assert "checks cleanly" in cli("diagnostics", str(path))
+    path.write_text(good.replace("reflexivity.", "discriminate."))
+    assert "No applicable tactic" in cli("diagnostics", str(path))
+    path.write_text(good)
+    assert "checks cleanly" in cli("diagnostics", str(path))
+
+
 def test_try_compares_tactics_without_touching_the_file(cli, demo):
     before = Path(demo).read_text()
     out = cli("try", f"{demo}:14", "  apply app_nil_r.", "  reflexivity.")

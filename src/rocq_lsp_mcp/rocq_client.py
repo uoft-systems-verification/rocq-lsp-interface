@@ -15,6 +15,8 @@ get wrong:
 * In Manual mode the server queues `prover/proofView` at the lowest event
   priority, so it arrives only after everything an interpret command
   scheduled has run. That is the completion signal used here.
+* Proof-body edits can leave stale executed states. If interpretation shows
+  no activity covering an edit, replace the process and retry the command.
 * A position outside the document makes the server exit, so positions are
   clamped.
 * Positions are UTF-16 offsets, which matters for the Unicode notation
@@ -194,7 +196,7 @@ class RocqLSPClient:
         self._highlights: Dict[str, Dict] = {}
         self._proof_view: Optional[Dict] = None
         self._proof_view_seq = 0
-        self._executions = 0
+        self._checking_doc: Optional[Dict[str, Any]] = None
         self._search_results: Dict[str, List[Dict]] = {}
         self._responses: Dict[Any, Dict] = {}
 
@@ -219,7 +221,8 @@ class RocqLSPClient:
 
         self._queue: "queue.Queue[Any]" = queue.Queue()
         self._reader = threading.Thread(
-            target=self._reader_loop, name="vsrocqtop-reader", daemon=True
+            target=self._reader_loop, args=(self.proc.stdout, self._queue),
+            name="vsrocqtop-reader", daemon=True
         )
         self._reader.start()
         self._initialize()
@@ -242,7 +245,7 @@ class RocqLSPClient:
                 f"vsrocqtop closed its input (status {self.proc.poll()})."
             ) from exc
 
-    def _reader_loop(self) -> None:
+    def _reader_loop(self, stdout, messages: "queue.Queue[Any]") -> None:
         """Read messages off stdout forever, on a thread of their own.
 
         The stream is buffered, so it cannot be polled with `select`: once a
@@ -252,7 +255,8 @@ class RocqLSPClient:
         here instead and hands whole messages to `_read` through a queue,
         which also keeps notifications drained so the pipe cannot fill.
         """
-        stdout = self.proc.stdout
+        # Bind both to this process: a retiring reader must never publish
+        # its messages (especially _CLOSED) into a replacement's queue.
         try:
             while True:
                 header = stdout.readline()
@@ -270,13 +274,13 @@ class RocqLSPClient:
                 if not body:
                     break
                 try:
-                    self._queue.put(json.loads(body))
+                    messages.put(json.loads(body))
                 except ValueError:
                     continue
         except (OSError, ValueError):
             pass
         finally:
-            self._queue.put(_CLOSED)
+            messages.put(_CLOSED)
 
     def _read(self, timeout: float) -> Optional[Dict[str, Any]]:
         """Take the next message, or None if none arrived within `timeout`."""
@@ -307,11 +311,20 @@ class RocqLSPClient:
             self._diagnostics[params.get("uri", "")] = params.get("diagnostics", [])
         elif method == "prover/updateHighlights":
             self._highlights[params.get("uri", "")] = params
-            # Non-empty processing or prepared ranges mean the server is
-            # actually running sentences, which is how we tell a real check
-            # from one that found nothing to do.
-            if params.get("processingRange") or params.get("preparedRange"):
-                self._executions += 1
+            doc = self._checking_doc
+            if doc is not None and params.get("uri") == doc["uri"]:
+                # Activity elsewhere (e.g. an appended definition) does not
+                # establish that an edited proof was invalidated.
+                edit = doc["dirty_range"]
+                start = (edit["start"]["line"], edit["start"]["character"])
+                end = (edit["end"]["line"], edit["end"]["character"])
+                for rng in (params.get("processingRange") or []) + (
+                    params.get("preparedRange") or []
+                ):
+                    first = (rng["start"]["line"], rng["start"]["character"])
+                    last = (rng["end"]["line"], rng["end"]["character"])
+                    if first <= start and end <= last and start < last:
+                        doc["edit_executed"] = True
         elif method == "prover/proofView":
             self._proof_view = params
             self._proof_view_seq += 1
@@ -383,6 +396,7 @@ class RocqLSPClient:
         except subprocess.TimeoutExpired:
             self.proc.kill()
             self.proc.wait(timeout=5)
+        self._reader.join(timeout=5)
         for stream in (self.proc.stdin, self.proc.stdout):
             try:
                 stream.close()
@@ -438,6 +452,10 @@ class RocqLSPClient:
         self._diagnostics.clear()
         self._highlights.clear()
         self._proof_view = None
+        self._proof_view_seq = 0
+        self._checking_doc = None
+        self._search_results.clear()
+        self._responses.clear()
         self._start_process()
         self.open_file(keep, content)
 
@@ -513,6 +531,11 @@ class RocqLSPClient:
                 "contentChanges": [{"range": rng, "text": text}],
             },
         )
+        if not doc["dirty"]:
+            doc["dirty_content"] = doc["content"]
+        # Reverse the diff to express the entire pending edit in the NEW
+        # document's coordinates, including multiple updates before a check.
+        doc["dirty_range"], _ = replacement_edit(new_content, doc["dirty_content"])
         doc["content"] = new_content
         doc["dirty"] = True
         self._ensure_parsed(rel_path)
@@ -546,6 +569,50 @@ class RocqLSPClient:
         return {"line": line, "character": max(0, min(character, utf16_len(text)))}
 
     # --- checking -----------------------------------------------------------
+
+    def _interpret(
+        self, rel_path: str, position: Optional[Dict[str, int]],
+        timeout: float, what: str,
+    ) -> Optional[Dict]:
+        """Interpret, retrying once in a fresh process if an edit was skipped.
+
+        VsRocq can retain executed proof bodies after didChange. A completed
+        proof view alone is therefore insufficient: an edited document must
+        show processing/preparation covering the changed span. This also
+        prevents an early goal request from blessing stale later sentences.
+        """
+        with self._lock:
+            doc = self._doc(rel_path)
+            doc["edit_executed"] = False
+            self._checking_doc = doc if doc["dirty"] else None
+            try:
+                view = None
+                if has_code(doc["content"]):
+                    params: Dict[str, Any] = {
+                        "textDocument": {"uri": doc["uri"], "version": doc["version"]}
+                    }
+                    method = "prover/interpretToEnd"
+                    if position is not None:
+                        method = "prover/interpretToPoint"
+                        params["position"] = position
+                    self._notify(method, params)
+                    view = self._await_proof_view(timeout, what)
+            finally:
+                self._checking_doc = None
+
+            if doc["dirty"] and not doc["edit_executed"]:
+                self._restart(rel_path)
+                # didOpen creates a clean document, so this cannot retry again.
+                return self._interpret(rel_path, position, timeout, what)
+
+            # A changed tactic may execute successfully while the old Qed
+            # remains cached. A point check therefore cannot validate the
+            # whole document, even when its activity covers the edit.
+            if position is None:
+                doc["dirty"] = False
+                doc.pop("dirty_content", None)
+                doc.pop("dirty_range", None)
+            return view
 
     def _await_proof_view(
         self, timeout: float, what: str, startup: float = 5.0
@@ -584,16 +651,8 @@ class RocqLSPClient:
 
     def check_file(self, rel_path: str, timeout: float = DEFAULT_TIMEOUT) -> List[Dict]:
         """Check the whole document and return its diagnostics."""
-        doc = self._doc(rel_path)
-        if not has_code(doc["content"]):
-            # A document with no sentences never produces a proof view.
-            return self._diagnostics.get(doc["uri"], [])
-        self._notify(
-            "prover/interpretToEnd",
-            {"textDocument": {"uri": doc["uri"], "version": doc["version"]}},
-        )
-        self._await_proof_view(timeout, f"the check of {rel_path}")
-        return self._diagnostics.get(doc["uri"], [])
+        self._interpret(rel_path, None, timeout, f"the check of {rel_path}")
+        return self.get_diagnostics(rel_path)
 
     def goals_at(
         self,
@@ -607,17 +666,10 @@ class RocqLSPClient:
         Only the sentences up to that point are executed, which is much
         cheaper than checking the whole file.
         """
-        doc = self._doc(rel_path)
         position = self.clamp_position(rel_path, line, character)
-        self._notify(
-            "prover/interpretToPoint",
-            {
-                "textDocument": {"uri": doc["uri"], "version": doc["version"]},
-                "position": position,
-            },
+        return self._interpret(
+            rel_path, position, timeout, f"the goal at {rel_path}:{line + 1}"
         )
-        view = self._await_proof_view(timeout, f"the goal at {rel_path}:{line + 1}")
-        return view
 
     def get_diagnostics(self, rel_path: str) -> List[Dict]:
         """Diagnostics from the last check, without starting a new one."""

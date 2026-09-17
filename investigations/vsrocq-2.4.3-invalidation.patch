@@ -1,0 +1,18 @@
+diff --git a/language-server/dm/scheduler.ml b/language-server/dm/scheduler.ml
+index 9555626..dd0bf45 100644
+--- a/language-server/dm/scheduler.ml
++++ b/language-server/dm/scheduler.ml
+@@ -254,6 +254,13 @@ let schedule_sentence (id, (ast, classif, synterp_st)) st schedule =
+     SM.update x upd deps
+   in
+   let dependencies = Option.cata (fun x -> add_dep schedule.dependencies x id) schedule.dependencies base in
++  (* Execution can start an opaque proof from its opener, but a cached
++     terminator must still be invalidated when any proof step changes. *)
++  let dependencies = match task with
++    | OpaqueProof { tasks; _ } ->
++      List.fold_left (fun deps (step : executable_sentence) -> add_dep deps step.id id) dependencies tasks
++    | _ -> dependencies
++  in
+   (* This new sentence impacts no sentence (yet) *)
+   let dependencies = SM.add id Stateid.Set.empty dependencies in
+   st, { tasks; dependencies }
