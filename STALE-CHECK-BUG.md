@@ -112,19 +112,26 @@ speedup. The intended design is to pay it only when needed:
 
 1. Track the pending edited span in the new document's UTF-16 coordinates,
    retaining the baseline across multiple edits before a check.
-2. Require `updateHighlights` for that document with a processing or prepared
+2. For whole-file checks, require `updateHighlights` with a processing or prepared
    range covering the edited span. Activity elsewhere is insufficient: changing
    `reflexivity.` to `discriminate.` and appending a definition was reproduced
    returning clean with activity only for the new definition. A check without
-   coverage is treated as potentially stale, including partial goal requests.
+   coverage is treated as potentially stale.
    A successful point check keeps the edit pending: executing the changed tactic
    does not establish that its cached `Qed` has been revalidated.
 3. In that case restart the prover, reopen the document and check again.
 
-Statement and definition edits keep the fast path, because the server really
-does re-execute for those. Proof-body edits fall back to a cold check, which is
-what correctness costs here. On `Combine.v` a cold check is 6.5 s, against 0.0 s
-for the stale answer and 6.5 s for `rocq compile`.
+Point queries separately track the checked prefix. Requests before the edit or
+within an already visited prefix need no new activity. Advancing through the
+edit requires contiguous processing/preparation activity reaching the returned
+sentence. A subsequent edit moves the boundary back as needed. Point checks
+keep whole-file validation pending, and crossing a stale cached `Qed` still
+triggers recovery.
+
+Statement and definition edits keep the fast path when the server re-executes
+them. Whole-file checks of proof-body edits can still fall back to a cold check.
+On `Combine.v` a cold check was 6.5 s, against 0.0 s for the stale answer and
+6.5 s for `rocq compile`.
 
 Both `check_file` and `goals_at` use the shared `_interpret` path. Recovery retries
 once, preserving the latest in-memory text (including temporary tactic attempts),
@@ -132,9 +139,16 @@ the requested position and timeout. The replacement clears all server caches;
 the old reader is bound to its own queue so it cannot poison the new process.
 Other documents reopen on demand through `Workspace.open`.
 
-The fallback is deliberately conservative: whitespace/comment edits or goal
-requests before the edited span can also trigger a restart. Empty documents are
+The whole-file fallback is deliberately conservative: whitespace/comment edits
+can also trigger a restart. Goals before the edited span reuse the prefix. Empty documents are
 handled without waiting for a proof view. Recovery failures propagate as errors.
+
+The initial fallback incorrectly required an entire edit to execute even for a
+point request before it. This caused unnecessary cold replays in the before/after
+goal workflow. In `kubernetes-verification`'s `progress.v`, inserting a tactic at
+line 187 improved from 6.638 s to 0.264 s, and deleting it from 6.651 s to 0.216 s,
+with the same prover process retained after the fix. Edits were in memory only;
+the source file was unchanged. See the [benchmark and rationale](VSROCQ-INCREMENTAL-CHECKING-SURVEY.md#follow-up-point-query-incrementality).
 
 Regression tests cover proof edits, mixed edits with unrelated activity, multiple
 pending edits, partial goals, error-to-clean recovery, deletion of all code,

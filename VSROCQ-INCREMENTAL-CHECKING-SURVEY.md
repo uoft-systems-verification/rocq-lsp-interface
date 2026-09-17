@@ -128,10 +128,19 @@ prover on a larger example. These historical observations are recorded in
 Both CLI and MCP tools share
 [`RocqLSPClient._interpret`](src/rocq_lsp_mcp/rocq_client.py).
 The implementation records a pending edit span in the current text's UTF-16
-coordinates, including multiple updates before checking. During interpretation
-it looks for processing or preparation activity covering that span in the same
+coordinates, including multiple updates before checking. During whole-file
+interpretation it looks for processing or preparation activity covering that span in the same
 document. Missing coverage triggers one process restart and replay using the
 latest in-memory text and requested position.
+
+Point requests instead track the prefix validated since the earliest pending
+edit. A request before the edit or within that prefix can reuse its cached state.
+To advance through edited text, contiguous processing/preparation ranges must
+reach the returned sentence. The returned sentence matters because a cursor in
+whitespace can refer to the preceding sentence. Each further edit moves the
+validated boundary back to its start if necessary; a failed request cannot
+advance it. Crossing a cached `Qed` without covering the intervening edit still
+triggers recovery. A successful point request keeps whole-file validation pending.
 
 A global activity counter was insufficient: an appended definition can execute
 while a changed proof remains unchecked. A point request also cannot clear the
@@ -149,16 +158,61 @@ model; highlight activity itself is not a formal proof-validity certificate.
 | Unchanged document | Reuses existing state |
 | Tested definition, statement, and insertion edits with confirming activity | Keeps the existing process |
 | Edit lacking confirming activity | Replays in a fresh process |
-| Some comment edits or point requests before the edit | May restart conservatively |
+| Point requests before the edit or within the validated prefix | Reuse cached state |
+| Whole-file checks after some comment edits | May restart conservatively |
 | Other documents in the same project after a restart | Lose cached state and reopen on demand |
 
 A point replay executes only up to the requested position; a whole-file replay
-checks the whole file. Repeated in-place tactic repair can therefore lose much
-of the original speed benefit. The original `Combine.v` report measured about
+checks the whole file. Repeated whole-file diagnostics after tactic repair can
+therefore lose much of the original speed benefit; ordinary point queries now
+preserve the prefix. The original `Combine.v` report measured about
 6.5 seconds for a cold check; this survey did not repeat that benchmark.
 
 After the additional point-then-end fix, the client suite passed **64 tests**,
 including real prover checks and CLI/MCP disk-edit workflows.
+
+### Follow-up: point-query incrementality
+
+The initial client fallback applied the whole-edit coverage requirement to every
+point query. A goal tool without a column makes two requests: before the tactic,
+then after it. The first request cannot execute an edit after its cursor, so our
+guard restarted a healthy incremental prover before the second request. This
+performance regression was in the MCP/CLI client, independently of the upstream
+stale-`Qed` problem. The prefix tracking above fixes that unnecessary restart.
+
+Benchmarked `/Users/ziyu/Code/kubernetes-verification`, using
+`src/proof/controllers/replicaset/progress.v` and the installed, unmodified
+VsRocq 2.4.3. Each column is one run of the same before/after goal sequence through
+the shared client; these are not MCP transport timings. Edit cases include
+`update_file`. Only the private prover's in-memory document was changed.
+
+| Request | Before fix | After fix |
+| --- | --- | --- |
+| Cold goal at line 187 | 4.998 s | 4.910 s |
+| Unchanged warm goal at line 187 | 0.007 s | 0.007 s |
+| Insert `idtac.` after line 186; goal at 187 | 6.638 s; restarted | 0.264 s; same process |
+| Delete inserted tactic; goal at 187 | 6.651 s; restarted | 0.216 s; same process |
+| Insert after line 186; goal at 18 | 5.928 s; restarted | 0.200 s; same process |
+
+The exact CLI command `/usr/bin/time -p rocq-lsp goal
+src/proof/controllers/replicaset/progress.v:18` was also run in an isolated
+session: **6.14 s cold, 0.25 s warm**. That includes CLI overhead.
+Both benchmark runs confirmed the source file's bytes remained unchanged
+(SHA-256 `b189b40d2640378913e2255e12f26ecf732926f8bd17b7270512b205addb3e65`).
+These runs benchmark goal inspection; they do not compile or verify the entire
+Kubernetes proof file.
+
+Reproduce with the [benchmark script](investigations/benchmark_incremental_goals.py):
+
+```sh
+.venv/bin/python investigations/benchmark_incremental_goals.py \
+  /Users/ziyu/Code/kubernetes-verification \
+  src/proof/controllers/replicaset/progress.v --after-line 186 --expect-incremental
+```
+
+The complete client suite now passes **71 tests**, covering insertion, deletion,
+replacement, repeated point queries, subsequent edits to a visited tactic,
+failed requests, MCP project-state retention, and stale-`Qed` recovery.
 
 ## Experimental server repair and the preferred direction
 

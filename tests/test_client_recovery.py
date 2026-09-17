@@ -71,6 +71,26 @@ def test_failed_check_keeps_the_edit_pending(client, monkeypatch):
     assert client._checking_doc is None
 
 
+def test_failed_point_check_does_not_advance_the_checked_prefix(client, monkeypatch):
+    doc = client._doc("Proof.v")
+    before = doc["point_checked_to"]
+
+    def timeout(*args):
+        client._on_notification("prover/updateHighlights", {
+            "uri": doc["uri"],
+            "preparedRange": [{"start": {"line": 0, "character": 0},
+                               "end": {"line": 0, "character": len(doc["content"])}}],
+        })
+        raise RocqLSPError("timed out")
+
+    monkeypatch.setattr(client, "_await_proof_view", timeout)
+    with pytest.raises(RocqLSPError, match="timed out"):
+        client.goals_at("Proof.v", 0)
+    assert doc["point_checked_to"] == before
+    assert doc["dirty"]
+    assert client._checking_doc is None
+
+
 def test_failed_restart_does_not_return_cached_clean_diagnostics(client, monkeypatch):
     monkeypatch.setattr(client, "_await_proof_view", Mock(return_value={"proof": None}))
     monkeypatch.setattr(client, "_start_process", Mock(

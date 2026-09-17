@@ -101,6 +101,57 @@ def test_executing_changed_tactic_does_not_validate_cached_qed(prover):
     assert any("incomplete proof" in d["message"] for d in diagnostics)
 
 
+def goal_on_line(prover, line):
+    text = prover.get_file_content("Proof.v").split("\n")[line]
+    before = prover.goals_at("Proof.v", line, len(text) - len(text.lstrip()))
+    after = prover.goals_at("Proof.v", line)
+    return before, after
+
+
+@pytest.mark.parametrize("changed", [
+    PROOF.replace("  reflexivity.\n", "  idtac.\n  reflexivity.\n"),
+    PROOF.replace("  simpl.\n", ""),
+    PROOF.replace("  simpl.\n  reflexivity.\n", "  idtac.\n  simpl.\n  reflexivity.\n"),
+], ids=["insert", "delete", "replace-tail"])
+def test_point_checks_reuse_the_prefix_after_edits(prover, changed):
+    prover.open_file("Proof.v", PROOF)
+    prover.check_file("Proof.v")
+    process = prover.proc
+    prover.update_file("Proof.v", changed)
+    # Query the unchanged prefix, then step through and revisit the edited body.
+    goal_on_line(prover, 2)
+    last_tactic = len(changed.splitlines()) - 2
+    for line in range(3, last_tactic + 1):
+        first = goal_on_line(prover, line)
+        assert goal_on_line(prover, line) == first
+        assert prover.proc is process
+    assert prover._doc("Proof.v")["dirty"]
+
+
+def test_new_edit_invalidates_the_previously_checked_point(prover):
+    prover.open_file("Proof.v", PROOF)
+    prover.check_file("Proof.v")
+    process = prover.proc
+    prover.update_file("Proof.v", PROOF.replace("reflexivity.", "idtac."))
+    goal_on_line(prover, 4)
+    prover.update_file("Proof.v", PROOF.replace("reflexivity.", "discriminate."))
+    goal_on_line(prover, 4)
+    assert "No applicable tactic" in str(prover.get_diagnostics("Proof.v"))
+    assert prover.proc is process
+
+
+def test_point_check_at_cached_qed_still_recovers(prover):
+    prover.open_file("Proof.v", PROOF)
+    prover.check_file("Proof.v")
+    process = prover.proc
+    prover.update_file("Proof.v", PROOF.replace("reflexivity.", "idtac."))
+    goal_on_line(prover, 4)
+    assert prover.proc is process
+    prover.goals_at("Proof.v", 5)
+    assert any("incomplete proof" in d["message"]
+               for d in prover.get_diagnostics("Proof.v"))
+
+
 def test_multiple_edits_before_check_are_all_validated(prover):
     prover.open_file("Proof.v", PROOF)
     prover.check_file("Proof.v")

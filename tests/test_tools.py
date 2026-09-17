@@ -99,6 +99,25 @@ async def test_goal_at_a_column(mcp_client_factory, demo):
         assert "⊢" in text
 
 
+async def test_goals_keep_project_state_after_tactic_edits(mcp_client_factory, tmp_path):
+    path = tmp_path / "Proof.v"
+    other = tmp_path / "Other.v"
+    good = "Lemma one : 1 = 1.\nProof.\n  idtac.\n  reflexivity.\nQed.\n"
+    path.write_text(good)
+    other.write_text("Definition other := 1.\n")
+    async with mcp_client_factory() as client:
+        await client.text("rocq_diagnostic_messages", {"file_path": str(path)})
+        await client.text("rocq_file_outline", {"file_path": str(other)})
+        for text in [good.replace("  idtac.\n", "  idtac.\n  idtac.\n"), good]:
+            path.write_text(text)
+            for _ in range(2):
+                result = await client.text("rocq_goal", {"file_path": str(path), "line": 3})
+                assert "⊢ 1 = 1" in result.split("--- after ---")[1]
+                # Replacing the shared prover would evict this other document.
+                status = await client.text("rocq_project_status")
+                assert "Other.v" in status
+
+
 async def test_goal_out_of_range_is_reported(mcp_client_factory, demo):
     async with mcp_client_factory() as client:
         text = await client.text("rocq_goal", {"file_path": demo, "line": 9999})

@@ -14,6 +14,11 @@ VsRocq's proof cache, the client restarts the prover and checks the current text
 from scratch. This also drops the project's other cached documents; they reopen
 on their next use.
 
+Goal queries preserve the checked prefix when later tactics are inserted,
+deleted, or replaced. Inspecting the states before and after an edited tactic
+does not require replaying the file from the beginning. Whole-file diagnostics
+retain the stricter fallback for a stale cached `Qed`.
+
 Starting and ending that session are their own commands. Working commands never
 start or stop one, so nothing is left running behind your back.
 

@@ -85,6 +85,10 @@ def position_at(text: str, offset: int) -> Dict[str, int]:
     return {"line": line, "character": column}
 
 
+def _position_key(position: Dict[str, int]) -> Tuple[int, int]:
+    return position["line"], position["character"]
+
+
 def replacement_edit(old: str, new: str) -> Tuple[Dict[str, Any], str]:
     """The single edit turning `old` into `new`.
 
@@ -316,15 +320,21 @@ class RocqLSPClient:
                 # Activity elsewhere (e.g. an appended definition) does not
                 # establish that an edited proof was invalidated.
                 edit = doc["dirty_range"]
-                start = (edit["start"]["line"], edit["start"]["character"])
-                end = (edit["end"]["line"], edit["end"]["character"])
-                for rng in (params.get("processingRange") or []) + (
+                start = _position_key(edit["start"])
+                end = _position_key(edit["end"])
+                ranges = (params.get("processingRange") or []) + (
                     params.get("preparedRange") or []
-                ):
-                    first = (rng["start"]["line"], rng["start"]["character"])
-                    last = (rng["end"]["line"], rng["end"]["character"])
+                )
+                for rng in sorted(ranges, key=lambda r: _position_key(r["start"])):
+                    first = _position_key(rng["start"])
+                    last = _position_key(rng["end"])
                     if first <= start and end <= last and start < last:
                         doc["edit_executed"] = True
+                    # Point queries need a checked prefix, not coverage of
+                    # the entire replacement (which may extend to EOF).
+                    through = doc.get("point_activity_to")
+                    if through is not None and first <= through < last:
+                        doc["point_activity_to"] = last
         elif method == "prover/proofView":
             self._proof_view = params
             self._proof_view_seq += 1
@@ -533,6 +543,13 @@ class RocqLSPClient:
         )
         if not doc["dirty"]:
             doc["dirty_content"] = doc["content"]
+            doc["point_checked_to"] = _position_key(rng["start"])
+        else:
+            # Coordinates before the new edit remain valid. Anything at or
+            # after it must be established again, even if visited earlier.
+            doc["point_checked_to"] = min(
+                doc["point_checked_to"], _position_key(rng["start"])
+            )
         # Reverse the diff to express the entire pending edit in the NEW
         # document's coordinates, including multiple updates before a check.
         doc["dirty_range"], _ = replacement_edit(new_content, doc["dirty_content"])
@@ -577,13 +594,16 @@ class RocqLSPClient:
         """Interpret, retrying once in a fresh process if an edit was skipped.
 
         VsRocq can retain executed proof bodies after didChange. A completed
-        proof view alone is therefore insufficient: an edited document must
-        show processing/preparation covering the changed span. This also
-        prevents an early goal request from blessing stale later sentences.
+        proof view alone is therefore insufficient for whole-file checking.
+        Point queries validate only the prefix through the returned sentence;
+        edits later in the document do not require earlier states to execute.
         """
         with self._lock:
             doc = self._doc(rel_path)
             doc["edit_executed"] = False
+            doc["point_activity_to"] = (
+                doc["point_checked_to"] if doc["dirty"] and position is not None else None
+            )
             self._checking_doc = doc if doc["dirty"] else None
             try:
                 view = None
@@ -600,7 +620,18 @@ class RocqLSPClient:
             finally:
                 self._checking_doc = None
 
-            if doc["dirty"] and not doc["edit_executed"]:
+            checked = doc["edit_executed"]
+            if doc["dirty"] and position is not None:
+                # A cursor in whitespace (or before a tactic) observes the
+                # preceding sentence. Reusing that sentence needs no activity.
+                target = _position_key(position)
+                if view and view.get("range"):
+                    target = min(target, _position_key(view["range"]["end"]))
+                checked = target <= doc["point_activity_to"]
+                if checked:
+                    doc["point_checked_to"] = max(doc["point_checked_to"], target)
+
+            if doc["dirty"] and not checked:
                 self._restart(rel_path)
                 # didOpen creates a clean document, so this cannot retry again.
                 return self._interpret(rel_path, position, timeout, what)
@@ -612,6 +643,7 @@ class RocqLSPClient:
                 doc["dirty"] = False
                 doc.pop("dirty_content", None)
                 doc.pop("dirty_range", None)
+                doc.pop("point_checked_to", None)
             return view
 
     def _await_proof_view(
