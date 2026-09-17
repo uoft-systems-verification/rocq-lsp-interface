@@ -318,12 +318,16 @@ def handle_start(project_path: str) -> int:
 def handle_stop() -> int:
     """End the session. Succeeds whether or not one was running."""
     ok, text = call("__shutdown__", {})
-    print(text if ok else "No session running.")
-    return 0
+    if not ok and text == NO_SESSION:
+        print("No session running.")
+        return 0
+    print(text)
+    return 0 if ok else 1
 
 
 def handle_restart(project_path: str) -> int:
-    handle_stop()
+    if handle_stop() != 0:
+        return 1
     # Let the socket disappear before starting again.
     deadline = time.monotonic() + 10
     while socket_path().exists() and time.monotonic() < deadline:

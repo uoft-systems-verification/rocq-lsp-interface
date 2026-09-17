@@ -100,6 +100,11 @@ matches lemmas *mentioning* that constant, which is usually nothing.
 **Goals are cheap, whole-file checks are not.** `goal` executes only up to the line
 you ask about. `diagnostics` executes the file.
 
+**Stopping checks.** Run `rocq-lsp stop` from another terminal to interrupt
+an active proof check. It confirms shutdown after releasing the session's
+provers. Ordinary requests remain sequential. The idle timeout does not
+interrupt an active check.
+
 **Memory.** Each open document holds prover state, often 1-4 GB for a large proof.
 Watch it with `status`, release one file with `close`, and end everything with
 `stop`. An idle session also exits on its own after an hour

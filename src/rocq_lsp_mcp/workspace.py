@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,7 +22,11 @@ class Workspace:
     is the whole point of running a daemon rather than a process per call.
     """
 
-    def __init__(self, rocq_args: Optional[List[str]] = None) -> None:
+    def __init__(
+        self, rocq_args: Optional[List[str]] = None,
+        cancel_event: Optional[threading.Event] = None,
+    ) -> None:
+        self.cancel_event = cancel_event or threading.Event()
         self.rocq_args = list(
             rocq_args
             if rocq_args is not None
@@ -49,12 +54,16 @@ class Workspace:
         return root.resolve()
 
     def client_for_project(self, project: Path) -> RocqLSPClient:
+        if self.cancel_event.is_set():
+            raise RocqLSPError("Session stopped; the operation was cancelled.")
         client = self.clients.get(project)
         if client is not None and client.is_alive():
             return client
         if client is not None:
             client.close()
-        client = RocqLSPClient(project, rocq_args=self.rocq_args)
+        client = RocqLSPClient(
+            project, rocq_args=self.rocq_args, cancel_event=self.cancel_event,
+        )
         self.clients[project] = client
         self.last_project = project
         return client

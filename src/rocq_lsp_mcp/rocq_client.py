@@ -186,11 +186,13 @@ class RocqLSPClient:
         rocq_args: Optional[List[str]] = None,
         executable: str = "vsrocqtop",
         goal_mode: str = "String",
+        cancel_event: Optional[threading.Event] = None,
     ) -> None:
         self.project_path = Path(project_path).resolve()
         self.rocq_args = list(rocq_args or [])
         self.goal_mode = goal_mode
         self._lock = threading.RLock()
+        self._cancel_event = cancel_event or threading.Event()
         self._next_id = 0
 
         # Per-document state, keyed by project-relative path.
@@ -229,11 +231,19 @@ class RocqLSPClient:
             name="vsrocqtop-reader", daemon=True
         )
         self._reader.start()
-        self._initialize()
+        try:
+            self._initialize()
+        except BaseException:
+            # A cancelled/failed initialization never reaches the workspace's
+            # registry, so this process must be cleaned up here.
+            self.close()
+            raise
 
     # --- transport ----------------------------------------------------------
 
     def _write(self, message: Dict[str, Any]) -> None:
+        if self._cancel_event.is_set() and message.get("method") != "exit":
+            raise RocqLSPError("Session stopped; the operation was cancelled.")
         if self.proc.poll() is not None:
             raise RocqLSPError(
                 f"vsrocqtop exited with status {self.proc.returncode}; "
@@ -288,10 +298,16 @@ class RocqLSPClient:
 
     def _read(self, timeout: float) -> Optional[Dict[str, Any]]:
         """Take the next message, or None if none arrived within `timeout`."""
-        try:
-            message = self._queue.get(timeout=max(0.0, timeout))
-        except queue.Empty:
-            return None
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if self._cancel_event.is_set():
+                raise RocqLSPError("Session stopped; the operation was cancelled.")
+            try:
+                message = self._queue.get(timeout=min(0.5, max(0.0, deadline - time.monotonic())))
+                break
+            except queue.Empty:
+                if time.monotonic() >= deadline:
+                    return None
         if message is _CLOSED:
             # Put it back so every later read fails the same way.
             self._queue.put(_CLOSED)

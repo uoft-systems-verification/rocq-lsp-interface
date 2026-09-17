@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import signal
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -20,8 +22,8 @@ from rocq_lsp_mcp import tools
 from rocq_lsp_mcp.rocq_client import RocqLSPError
 from rocq_lsp_mcp.workspace import Workspace
 
-# Requests are handled one at a time. An agent issues commands in sequence,
-# and a prover is not safe to drive concurrently.
+# Proof requests run in one worker because a prover is not safe to drive
+# concurrently. The listener stays responsive to shutdown during a check.
 TOOLS = {
     "goal": tools.goal,
     "diagnostics": tools.diagnostics,
@@ -92,47 +94,76 @@ def serve(idle_timeout: float = DEFAULT_IDLE_TIMEOUT) -> int:
     server.listen(16)
     server.settimeout(5.0)
 
-    workspace = Workspace()
-    stopping = {"now": False}
+    stopping = threading.Event()
+    workspace = Workspace(cancel_event=stopping)
+    pending: queue.Queue = queue.Queue()
+    shutdown_connection = None
+    last_activity = time.monotonic()
 
     def stop(signum, frame):
-        stopping["now"] = True
+        stopping.set()
 
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
+    def work():
+        nonlocal last_activity
+        while True:
+            item = pending.get()
+            try:
+                if item is None:
+                    return
+                conn, request = item
+                with conn:
+                    response = _handle(workspace, request) if not stopping.is_set() else {}
+                    if stopping.is_set():
+                        response = {"ok": False, "text": "Session stopped; the operation was cancelled."}
+                    _write_response(conn, response)
+            finally:
+                last_activity = time.monotonic()
+                pending.task_done()
+
+    worker = threading.Thread(target=work, name="rocq-lsp-requests", daemon=True)
+    worker.start()
     print(f"rocq-lsp daemon listening on {path}", flush=True)
-    last_activity = time.monotonic()
 
     try:
-        while not stopping["now"]:
+        while not stopping.is_set():
             try:
                 conn, _ = server.accept()
             except socket.timeout:
-                if idle_timeout and time.monotonic() - last_activity > idle_timeout:
+                if (idle_timeout and not pending.unfinished_tasks
+                        and time.monotonic() - last_activity > idle_timeout):
                     print("idle; shutting down", flush=True)
                     break
                 continue
             except OSError:
                 break
 
-            with conn:
-                request = _read_request(conn)
-                if request is None:
-                    continue
-                if request.get("tool") == "__shutdown__":
-                    _write_response(conn, {"ok": True, "text": "Session stopped."})
-                    stopping["now"] = True
-                    break
-                response = _handle(workspace, request)
-                _write_response(conn, response)
-            last_activity = time.monotonic()
+            request = _read_request(conn)
+            if request is None:
+                conn.close()
+                continue
+            if request.get("tool") == "__shutdown__":
+                shutdown_connection = conn
+                stopping.set()
+                break
+            pending.put((conn, request))
     finally:
+        stopping.set()
+        pending.put(None)
+        # Cancellation wakes a worker waiting on prover output. Unwind its
+        # request before touching the workspace and closing its processes.
+        worker.join()
         workspace.close_all()
+        server.close()
         try:
             path.unlink()
         except OSError:
             pass
+        if shutdown_connection is not None:
+            with shutdown_connection:
+                _write_response(shutdown_connection, {"ok": True, "text": "Session stopped."})
         print("daemon stopped", flush=True)
     return 0
 
