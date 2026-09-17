@@ -82,6 +82,17 @@ def test_goal_reports_a_finished_proof(cli, demo):
     assert "No goals" in out.split("--- after ---")[1]
 
 
+@pytest.mark.parametrize("position", ["5", "6", "5:15"])
+def test_goal_locates_the_failing_tactic(cli, test_project_path, position):
+    out = cli("goal", f"{test_project_path / 'broken.v'}:{position}")
+    errors = out.split("--- errors ---")[1]
+    assert "error at line 5, columns" in errors
+    assert "5 |   reflexivity." in errors
+    assert "^^" in errors
+    assert "Unable to unify" in errors
+    assert "Unsolved goals:" not in out
+
+
 def test_goal_keeps_the_original_unfocused_summary(cli, tmp_path):
     path = tmp_path / "Focused.v"
     path.write_text("Lemma pending : True /\\ 1 = 1.\nProof.\n  split.\n  - idtac.\nQed.\n")

@@ -23,6 +23,11 @@ Errors from `diagnostics` include unsolved goals at the error, with their
 hypotheses and conclusions, excluding unfocused goals. If no proof state is
 available, the error says so. The MCP diagnostic tool provides the same output.
 
+`goal` also reports errors up to the requested position with the same source
+line, column range, and caret marker as `diagnostics`, including earlier errors
+that block the requested tactic. Its normal goal display stays the same, and
+reporting these errors does not run a whole-file check.
+
 Starting and ending that session are their own commands. Working commands never
 start or stop one, so nothing is left running behind your back.
 

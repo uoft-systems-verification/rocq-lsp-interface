@@ -31,7 +31,7 @@ _RG_AVAILABLE, _RG_MESSAGE = check_ripgrep_status()
 
 
 def goal(ws: Workspace, file_path: str, line: int, column: Optional[int] = None) -> str:
-    """Proof state at a line. Only checks up to that line."""
+    """Proof state and located errors up to a position. No whole-file check."""
     client, rel_path, _ = ws.open(file_path)
     content = client.get_file_content(rel_path)
     lines = content.split("\n")
@@ -47,13 +47,34 @@ def goal(ws: Workspace, file_path: str, line: int, column: Optional[int] = None)
         after = format_proof_view(
             client.goals_at(rel_path, line - 1, None), "No goals after this line."
         )
-        return f"Line {line}:\n{text}\n\n--- before ---\n{before}\n\n--- after ---\n{after}"
+        output = f"Line {line}:\n{text}\n\n--- before ---\n{before}\n\n--- after ---\n{after}"
+    else:
+        view = client.goals_at(rel_path, line - 1, column - 1)
+        output = (
+            f"Goals at:\n{format_line(content, line, column)}\n\n"
+            f"{format_proof_view(view, 'Not a position with goals. Try inside a proof.')}"
+        )
 
-    view = client.goals_at(rel_path, line - 1, column - 1)
-    return (
-        f"Goals at:\n{format_line(content, line, column)}\n\n"
-        f"{format_proof_view(view, 'Not a position with goals. Try inside a proof.')}"
+    position = client.clamp_position(
+        rel_path, line - 1, column - 1 if column is not None else None,
     )
+    errors = []
+    for diagnostic in client.get_diagnostics(rel_path):
+        if diagnostic.get("severity") != 1:
+            continue
+        start = (diagnostic.get("range") or {}).get("start")
+        # Include earlier failures that blocked this query, but not errors
+        # beyond its cursor left over from a previous whole-file check.
+        if start and (start["line"], start["character"]) > (
+            position["line"], position["character"],
+        ):
+            continue
+        errors.append(diagnostic)
+    if errors:
+        output += "\n\n--- errors ---\n" + "\n\n".join(
+            format_diagnostics(errors, content=content)
+        )
+    return output
 
 
 def diagnostics(ws: Workspace, file_path: str) -> str:

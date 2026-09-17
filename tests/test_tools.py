@@ -138,6 +138,38 @@ async def test_goal_at_a_column(mcp_client_factory, demo):
         assert "⊢" in text
 
 
+@pytest.mark.parametrize("line,column", [(3, None), (4, None), (3, 15)])
+async def test_goal_reports_error_locations(mcp_client_factory, tmp_path, line, column):
+    path = tmp_path / "Broken.v"
+    path.write_text("Lemma wrong : 1 = 2.\nProof.\n  reflexivity.\n  idtac.\nQed.\n")
+    async with mcp_client_factory() as client:
+        args = {"file_path": str(path), "line": line}
+        if column is not None:
+            args["column"] = column
+        text = await client.text("rocq_goal", args)
+        errors = text.split("--- errors ---")[1]
+        assert "error at line 3, columns" in errors
+        assert "3 |   reflexivity." in errors
+        assert "^^" in errors
+        assert "Unable to unify" in errors
+        assert "Unsolved goals:" not in text
+
+
+async def test_goal_omits_cached_errors_after_the_cursor(mcp_client_factory, tmp_path):
+    path = tmp_path / "LaterError.v"
+    path.write_text("Lemma wrong : 1 = 2.\nProof.\n  reflexivity.\nQed.\n")
+    async with mcp_client_factory() as client:
+        await client.text("rocq_diagnostic_messages", {"file_path": str(path)})
+        for line, column in [(2, None), (3, 1)]:
+            args = {"file_path": str(path), "line": line}
+            if column is not None:
+                args["column"] = column
+            text = await client.text("rocq_goal", args)
+            assert "⊢ 1 = 2" in text
+            assert "--- errors ---" not in text
+            assert "Unable to unify" not in text
+
+
 async def test_goals_keep_project_state_after_tactic_edits(mcp_client_factory, tmp_path):
     path = tmp_path / "Proof.v"
     other = tmp_path / "Other.v"

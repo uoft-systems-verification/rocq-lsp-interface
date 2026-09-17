@@ -64,7 +64,8 @@ def rocq_goal(
     THE MAIN TOOL for proof work. Only the sentences up to that point are
     executed, so it is far cheaper than checking the whole file. With no
     column, shows the state before and after the line, which is how you see
-    what a tactic did.
+    what a tactic did. Errors up to the requested position include their
+    source line, column range, and caret marker.
 
     Args:
         file_path (str): Abs path to the .v file.
