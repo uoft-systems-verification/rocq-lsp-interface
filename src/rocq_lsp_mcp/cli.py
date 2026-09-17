@@ -19,9 +19,6 @@ from typing import Any, Dict, Optional, Tuple
 
 from rocq_lsp_mcp.daemon import log_path, socket_path
 
-CONNECT_TIMEOUT = 60.0
-
-
 # --- talking to the daemon --------------------------------------------------
 
 
@@ -82,19 +79,15 @@ def call(tool: str, args: Dict[str, Any], autostart: bool = False) -> Tuple[bool
 
     with client:
         client.sendall(json.dumps({"tool": tool, "args": args}).encode() + b"\n")
-        client.settimeout(CONNECT_TIMEOUT)
+        # The daemon owns operation deadlines. Keep the connection until it
+        # returns the result, including for checks lasting minutes or hours.
+        client.settimeout(None)
         chunks = []
-        try:
-            while b"\n" not in b"".join(chunks):
-                chunk = client.recv(65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-        except socket.timeout:
-            return False, (
-                "The prover is still working. Checking a large file can take "
-                "minutes; try again shortly, or raise ROCQ_LSP_TIMEOUT."
-            )
+        while b"\n" not in b"".join(chunks):
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
 
     raw = b"".join(chunks).strip()
     if not raw:

@@ -100,10 +100,17 @@ matches lemmas *mentioning* that constant, which is usually nothing.
 **Goals are cheap, whole-file checks are not.** `goal` executes only up to the line
 you ask about. `diagnostics` executes the file.
 
-**Stopping checks.** Run `rocq-lsp stop` from another terminal to interrupt
-an active proof check. It confirms shutdown after releasing the session's
-provers. Ordinary requests remain sequential. The idle timeout does not
-interrupt an active check.
+**Long checks.** The CLI waits for the result with no socket response timeout,
+and proof checking has no time limit by default. To interrupt a check, run
+`rocq-lsp stop` from another terminal; it confirms shutdown after releasing the
+session's provers. Ordinary requests remain sequential. The idle timeout does
+not interrupt an active check.
+
+For an explicit checking limit, start/restart with, for example,
+`ROCQ_LSP_TIMEOUT=900 rocq-lsp restart .`. An expired check closes its prover
+to stop the work and discard late responses; the next file command opens a
+fresh prover. Use `ROCQ_LSP_TIMEOUT=0` for unlimited checking. Initialization,
+parsing, and other protocol requests retain their separate timeouts.
 
 **Memory.** Each open document holds prover state, often 1-4 GB for a large proof.
 Watch it with `status`, release one file with `close`, and end everything with
@@ -119,7 +126,7 @@ restores it.
 |---|---|
 | `ROCQ_PROJECT_PATH` | Default project root; otherwise inferred from the file. |
 | `ROCQ_ARGS` | Extra Rocq options passed to the server. |
-| `ROCQ_LSP_TIMEOUT` | Seconds to allow one check. Default 300. |
+| `ROCQ_LSP_TIMEOUT` | Optional seconds to allow one check. Default 0 (unlimited). Set when starting/restarting the session. |
 | `ROCQ_LSP_IDLE_TIMEOUT` | Seconds before an idle daemon exits. Default 3600. |
 | `ROCQ_LSP_SOCKET` | Daemon socket path. Must stay under ~100 characters. |
 

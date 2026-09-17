@@ -34,11 +34,11 @@ def session(tmp_path, repo_root, test_project_path):
     marker = tmp_path / "prover.pid"
     env = {
         **os.environ, "ROCQ_LSP_SOCKET": str(socket_path),
-        "PYTHONPATH": str(repo_root / "src"), "ROCQ_LSP_TIMEOUT": "300",
+        "PYTHONPATH": str(repo_root / "src"), "ROCQ_LSP_TIMEOUT": "0",
     }
     children = []
 
-    def start(timeout="300"):
+    def start(timeout="0"):
         env["ROCQ_LSP_TIMEOUT"] = timeout
         daemon = subprocess.Popen(
             [sys.executable, "-c", LAUNCHER, str(marker)], env=env,
@@ -127,3 +127,19 @@ def test_stop_interrupts_check_and_waits_for_process_cleanup(session):
     assert check.returncode == 1
     assert "cancelled" in text
     assert daemon.wait(timeout=5) == 0
+
+
+def test_explicit_timeout_stops_execution_and_next_check_recovers(session):
+    start, command, slow, marker, _ = session
+    start(timeout="0.5")
+    check = command("diagnostics", slow, background=True)
+    pid = wait_for_prover(marker, check)
+    output, _ = check.communicate(timeout=12)
+    assert check.returncode == 1
+    assert "timed out after 0.5s" in output
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+    slow.write_text("Lemma done : True. Proof. exact I. Qed.\n")
+    code, output = command("diagnostics", slow)
+    assert code == 0 and "checks cleanly" in output
+    assert command("stop")[0] == 0

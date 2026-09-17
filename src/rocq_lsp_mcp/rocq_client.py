@@ -34,13 +34,17 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-DEFAULT_TIMEOUT = float(os.environ.get("ROCQ_LSP_TIMEOUT", "300"))
+DEFAULT_TIMEOUT = float(os.environ.get("ROCQ_LSP_TIMEOUT", "0"))
 # vsrocqtop answers quick requests promptly; only interpretation is slow.
 QUICK_TIMEOUT = float(os.environ.get("ROCQ_LSP_QUICK_TIMEOUT", "30"))
 
 
 class RocqLSPError(RuntimeError):
     """The server failed a request, died, or did not answer in time."""
+
+
+class _ProofTimeout(RocqLSPError):
+    """An explicitly requested proof-checking deadline expired."""
 
 
 class _Closed:
@@ -633,6 +637,11 @@ class RocqLSPClient:
                         params["position"] = position
                     self._notify(method, params)
                     view = self._await_proof_view(timeout, what)
+            except _ProofTimeout:
+                # Stop the timed-out execution so a late proofView cannot be
+                # mistaken for the next request's result. Reopen on next use.
+                self.close()
+                raise
             finally:
                 self._checking_doc = None
 
@@ -676,19 +685,25 @@ class RocqLSPClient:
         so `startup` only has to cover scheduling.
         """
         seen = self._proof_view_seq
-        deadline = time.monotonic() + timeout
+        # Zero (the default) disables the proof-checking deadline.
+        deadline = time.monotonic() + timeout if timeout > 0 else None
         started = False
 
         while self._proof_view_seq <= seen:
             now = time.monotonic()
-            if now >= deadline:
-                raise RocqLSPError(
+            if deadline is not None and now >= deadline:
+                raise _ProofTimeout(
                     f"timed out after {timeout:g}s waiting for {what}. Large "
                     "proof files can legitimately take minutes; raise "
-                    "ROCQ_LSP_TIMEOUT if this is expected."
+                    "ROCQ_LSP_TIMEOUT or set it to 0 for unlimited checking."
                 )
-            message = self._read(min(0.5, deadline - now) if started else startup)
+            wait = 0.5 if started else startup
+            if deadline is not None:
+                wait = min(wait, deadline - now)
+            message = self._read(wait)
             if message is None:
+                if deadline is not None and time.monotonic() >= deadline:
+                    continue
                 if not started:
                     return None
                 continue
