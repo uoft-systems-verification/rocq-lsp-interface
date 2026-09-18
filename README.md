@@ -159,7 +159,7 @@ on the last line instead.
 ## Tests
 
 ```sh
-uv run pytest tests -q
+uv run --extra dev pytest tests -q
 ```
 
 The CLI tests run real commands through a private daemon; the MCP tests drive a real
