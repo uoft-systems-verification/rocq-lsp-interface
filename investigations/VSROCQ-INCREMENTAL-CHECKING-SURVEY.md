@@ -126,7 +126,7 @@ prover on a larger example. These historical observations are recorded in
 ## Current client protection and its performance cost
 
 Both CLI and MCP tools share
-[`RocqLSPClient._interpret`](src/rocq_lsp_mcp/rocq_client.py).
+[`RocqLSPClient._interpret`](../src/rocq_client.py).
 The implementation records a pending edit span in the current text's UTF-16
 coordinates, including multiple updates before checking. During whole-file
 interpretation it looks for processing or preparation activity covering that span in the same

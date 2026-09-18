@@ -34,7 +34,7 @@ def session(tmp_path, repo_root, test_project_path):
     marker = tmp_path / "prover.pid"
     env = {
         **os.environ, "ROCQ_LSP_SOCKET": str(socket_path),
-        "PYTHONPATH": str(repo_root / "src"), "ROCQ_LSP_TIMEOUT": "0",
+        "ROCQ_LSP_TIMEOUT": "0",
     }
     children = []
 

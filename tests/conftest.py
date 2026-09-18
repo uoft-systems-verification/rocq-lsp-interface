@@ -29,11 +29,7 @@ def test_project_path(repo_root: Path) -> Path:
 def mcp_client_factory(
     repo_root: Path, test_project_path: Path
 ) -> Callable[[], AsyncContextManager[MCPClient]]:
-    pythonpath = [str(repo_root / "src")]
-    if existing := os.environ.get("PYTHONPATH"):
-        pythonpath.append(existing)
     env = {
-        "PYTHONPATH": os.pathsep.join(pythonpath),
         "PATH": os.environ.get("PATH", ""),
         "HOME": os.environ.get("HOME", ""),
         "ROCQ_LOG_LEVEL": "ERROR",

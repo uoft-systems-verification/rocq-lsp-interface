@@ -17,7 +17,7 @@ dev = [
 
 [tool.setuptools]
 packages = ["rocq_lsp_mcp"]
-package-dir = {"" = "src"}
+package-dir = {"rocq_lsp_mcp" = "src"}
 
 [build-system]
 requires = ["setuptools>=61.0"]

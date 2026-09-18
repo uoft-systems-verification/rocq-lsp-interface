@@ -168,7 +168,7 @@ stdio session. Both skip when `vsrocqtop` is missing.
 ## Layout
 
 ```
-src/rocq_lsp_mcp/
+src/               the `rocq_lsp_mcp` package
   rocq_client.py   LSP client for vsrocqtop
   workspace.py     one prover per project
   tools.py         the tools, independent of how they are exposed

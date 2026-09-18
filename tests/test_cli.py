@@ -46,7 +46,6 @@ def cli(test_project_path: Path, repo_root: Path):
     env = {
         **os.environ,
         "ROCQ_LSP_SOCKET": str(socket),
-        "PYTHONPATH": str(repo_root / "src"),
     }
 
     def run(*args: str, expect_ok: bool = True) -> str:
@@ -187,8 +186,7 @@ def test_missing_file_is_reported(cli, test_project_path):
 def test_working_commands_do_not_start_a_session(cli, demo, repo_root):
     """Only `start` may bring a session up."""
     lonely = Path(f"/tmp/rocq-lsp-none-{os.getpid()}.sock")
-    env = {**os.environ, "ROCQ_LSP_SOCKET": str(lonely),
-           "PYTHONPATH": str(repo_root / "src")}
+    env = {**os.environ, "ROCQ_LSP_SOCKET": str(lonely)}
     done = subprocess.run(
         [sys.executable, "-m", "rocq_lsp_mcp.cli", "goal", f"{demo}:13"],
         capture_output=True, text=True, env=env, cwd=str(repo_root), timeout=60,
