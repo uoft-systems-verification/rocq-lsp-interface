@@ -1,28 +1,42 @@
 # rocq-lsp
 
-Rocq prover tools for a coding agent, on the command line.
+`rocq-lsp` brings [VsRocq](https://github.com/rocq-prover/vsrocq)'s persistent,
+incremental proof checking to the command line and MCP. It reuses checked
+prefixes during proof editing and exposes intermediate goals and errors without
+repeatedly compiling the whole file.
 
-Drives [VsRocq](https://github.com/rocq-prover/vsrocq)'s language server `vsrocqtop`
-over LSP, so an agent can inspect goals, check files and try tactics in a Rocq
-development. A mirror of
-[lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp), exposed as a CLI first and
-as an MCP server second.
+Each fresh `rocq compile` invocation reloads dependencies and checks the source
+from the beginning. `rocq-lsp` drives VsRocq's language server `vsrocqtop` directly
+over LSP, making its cached proof states available to shell users and coding
+agents without VS Code.
+
+Inspired by [lean-lsp-mcp](https://github.com/oOo0oOo/lean-lsp-mcp), it offers the
+same proof tools through a CLI and an MCP server. Checking happens in memory;
+building compiled library artifacts remains the job of Rocq's compiler and the
+project's build system.
 
 A background session keeps the prover warm between commands. You start and stop
 it explicitly; working commands never do, so nothing is left running behind your
 back.
 
-Edits sync incrementally. `goal` keeps the checked prefix when later tactics are
-inserted, deleted or replaced, so inspecting an edited tactic does not replay the
-file. If VsRocq's proof cache skips an edit, the client restarts the prover and
-rechecks the current text; the project's other documents reopen on next use.
-`diagnostics` never relies on `goal`'s partial checks, so a stale cached `Qed`
-still gets a full recheck.
+Use `goal` to inspect a proof or check a file. It executes top to bottom up to
+the line you ask about and reuses what is already checked, so ask for a file's
+last line to check the whole file. It keeps the checked prefix when tactics are
+inserted, deleted or replaced. If VsRocq's proof cache skips an edit, the client
+restarts the prover and rechecks the current text; the project's other documents
+reopen on next use.
 
-Errors carry the source line, column range and a caret marker. `diagnostics`
-adds the unsolved goals at each error, excluding unfocused ones. `goal` reports
-errors up to the requested position, including earlier ones that block it,
-without checking the whole file.
+`goal` reports every error up to that line, with the source line, column range
+and a caret marker, next to the proof context.
+
+## Assumptions
+
+`rocq-lsp` is for fast proof repair in a development that already builds. The
+prover checks only the file you are working on; everything it imports must be
+compiled already. Before debugging a proof, make sure the `.vos` files of its
+dependencies exist, for example with `make vos` or
+`rocq-lsp build path/to/dep.vos`. A missing one makes the `Require` fail, and a
+stale one is loaded as is.
 
 ## Requirements
 
@@ -52,8 +66,8 @@ rocq-lsp start                  # optionally: rocq-lsp start path/to/project
 # The main tool: proof state at a line, showing what the tactic there did.
 rocq-lsp goal src/proof/foo.v:42
 
-# Check a whole file.
-rocq-lsp diagnostics src/proof/foo.v
+# Check a whole file: ask for its last line.
+rocq-lsp goal src/proof/foo.v:120
 
 # What is in this file?
 rocq-lsp outline src/proof/foo.v
@@ -77,9 +91,6 @@ commands separate from the working ones.
 `rocq-lsp <command> --help` describes each one.
 
 ### Notes that save time
-
-**Goals are cheap, whole-file checks are not.** `goal` executes only up to the line
-you ask about. `diagnostics` executes the file.
 
 **Long checks.** The CLI waits for the result with no socket response timeout,
 and proof checking has no time limit by default. To interrupt a check, run
@@ -142,7 +153,8 @@ prover features.
 ## TODO
 
 Not yet stable, so not documented above: `search`, `suggest`, `query`, `hover`,
-`find`.
+`find`. `diagnostics` also works but can lose incremental checking; use `goal`
+on the last line instead.
 
 ## Tests
 
