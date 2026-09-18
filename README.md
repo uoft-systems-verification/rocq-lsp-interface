@@ -55,7 +55,7 @@ That puts `rocq-lsp` on PATH inside the virtualenv.
 
 ## Use
 
-For a full worked session, see [TUTORIAL.md](./TUTORIAL.md).
+For a full worked session, see [tutorial/Tutorial.md](./tutorial/Tutorial.md).
 
 Positions are 1-indexed and written `FILE:LINE` or `FILE:LINE:COLUMN`.
 
