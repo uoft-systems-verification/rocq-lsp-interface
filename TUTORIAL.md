@@ -3,16 +3,15 @@
 A complete worked session. Every command and every output below was run against
 Rocq 9.1; nothing is invented.
 
-The task: finish a proof, without knowing in advance what the relevant lemmas are
-called. That is the usual situation, because library names differ between Rocq
-versions.
+The task: finish a proof, testing each step in the prover before it goes into
+the file.
 
 ## Before you start
 
 You need `vsrocqtop` and `rocq` on PATH, then:
 
 ```sh
-uv venv && uv pip install -e .
+uv sync && uv pip install -e .
 ```
 
 Starting and ending a session are explicit. Working commands never do it for you,
@@ -35,6 +34,8 @@ $ rocq-lsp start /tmp/rocq-tutorial
 Session started.
 Session ready.
 project: /private/tmp/rocq-tutorial
+
+No provers running. They start on the first file command.
 ```
 
 The path is optional; it just points the session at a project up front. If you
@@ -100,37 +101,7 @@ discharges the goal.
 This command executed only the sentences above line 7. It did not check the rest
 of the file.
 
-## 3. Ask the prover what applies
-
-```sh
-$ rocq-lsp suggest lists.v:7 --max 4
-Lemmas applicable to the goal at line 7 (3792 found):
-length_app
-partition_length
-length_prod
-length_combine
-... and 3788 more, ranked lower
-```
-
-This is Rocq's own goal-directed ranking, not a text search. `length_app` is the
-first suggestion and it is the right first step.
-
-## 4. Confirm before you write it
-
-Names move between versions, so check rather than guess:
-
-```sh
-$ rocq-lsp search lists.v '(length (_ ++ _) = _)' --max 2
-length_app
-    forall [A : Type] (l l' : list A), length (l ++ l') = length l + length l'
-last_length
-    forall [A : Type] (l : list A) (a : A), length (l ++ [a]) = S (length l)
-```
-
-Mind the quoting: the pattern must reach Rocq intact, so wrap it in single quotes.
-To search by name instead, quote the name too: `'"app_nil"'`.
-
-## 5. Try candidates before editing
+## 3. Try candidates before editing
 
 `try` replaces a line in the prover's copy only. Your file is not touched.
 
@@ -150,13 +121,15 @@ The reference Nat.add_comm was not found in the current environment.
 A : Type
 l1, l2 : list A
 ⊢ length (l1 ++ l2) = length l2 + length l1
+
+[error] The reference Nat.add_comm was not found in the current environment.
 ```
 
 Two answers at once. `rewrite length_app.` works and leaves an addition to
 commute. `Nat.add_comm` is not in scope under this import, which you would
 otherwise have found out by editing the file and re-checking.
 
-## 6. Make the edit, then look again
+## 4. Make the edit, then look again
 
 Edit `lists.v` with your normal tools so the proof reads:
 
@@ -171,26 +144,30 @@ the file on disk against what the prover holds and syncs the difference.
 
 ```sh
 $ rocq-lsp goal lists.v:8
+Line 8:
+Admitted.
+
 --- before ---
 A : Type
 l1, l2 : list A
 ⊢ length l1 + length l2 = length l2 + length l1
+
+--- after ---
+No goals. The proof is complete at this point.
 ```
 
-## 7. Find the second step
+## 5. Find the second step
+
+The short name was not in scope, so try the qualified one:
 
 ```sh
-$ rocq-lsp search lists.v '(_ + _ = _ + _)' --max 2
-PeanoNat.Nat.add_comm
-    forall n m : nat, n + m = m + n
-PeanoNat.Nat.add_succ_comm
-    forall n m : nat, S n + m = n + S m
+$ rocq-lsp try lists.v:8 "  apply PeanoNat.Nat.add_comm."
+===   apply PeanoNat.Nat.add_comm.
+no diagnostics
+No goals. The proof is complete at this point.
 ```
 
-There is the qualified name that is actually in scope. `rocq-lsp find add_comm`
-searches installed sources by text if you would rather see where it is defined.
-
-## 8. Finish and verify
+## 6. Finish and verify
 
 ```coq
 Proof.
@@ -207,13 +184,13 @@ No diagnostics; the file checks cleanly.
 `diagnostics` checks the whole file, unlike `goal`. Use it to confirm you are
 done, and `goal` while you are working.
 
-## 9. Tidy up
+## 7. Tidy up
 
 ```sh
 $ rocq-lsp status
 /private/tmp/rocq-tutorial
   project file: /private/tmp/rocq-tutorial/_CoqProject
-  memory: 96 MB
+  memory: 217 MB
   open: lists.v
 
 $ rocq-lsp close lists.v
@@ -227,7 +204,7 @@ Session stopped.
 everything. Both are safe to repeat, and `stop` succeeds even if nothing was
 running, so it is safe at the end of a script.
 
-A small file costs about 96 MB. A large development costs 1 to 4 GB per open
+A small file costs about 200 MB. A large development costs 1 to 4 GB per open
 file, so `close` matters there. An idle daemon exits on its own after an hour.
 
 ## What made that a session
@@ -248,11 +225,6 @@ everything under it.
 | Want to | Command |
 |---|---|
 | See the proof state | `rocq-lsp goal FILE:LINE` |
-| Find the next step | `rocq-lsp suggest FILE:LINE` |
-| Find a lemma by shape | `rocq-lsp search FILE '(_ + _ = _ + _)'` |
-| Find a lemma by name | `rocq-lsp search FILE '"add_comm"'` |
-| Check a name exists | `rocq-lsp find add_comm` |
-| Inspect a term | `rocq-lsp query FILE:LINE Print foo` |
 | Compare tactics | `rocq-lsp try FILE:LINE "  tac1." "  tac2."` |
 | Check the whole file | `rocq-lsp diagnostics FILE` |
 | See the file's structure | `rocq-lsp outline FILE` |

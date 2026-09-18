@@ -256,9 +256,9 @@ The probe deliberately bypasses our recovery path to test server behavior.
 
 ## Scope
 
-- Affects `diagnostics`, and equally `goal`, `suggest`, `query` and `hover`,
-  since all of them interpret the document through the same path. A goal shown
-  after an in-place tactic edit is the goal of the previous text.
+- Affects `diagnostics`, and equally `goal`, since both interpret the document
+  through the same path. A goal shown after an in-place tactic edit is the goal
+  of the previous text.
 - Affects the MCP front end identically; both call the same functions.
 - Very likely affects **rocqd**, the Rust daemon, which drives vsrocqtop with
   the same `didChange` + `interpretToEnd` mechanism. Its proof-repair benchmark
