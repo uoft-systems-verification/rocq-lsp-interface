@@ -2,6 +2,23 @@
 
 Edit a working proof, locate the failure, and test a repair.
 
+## Command summary
+
+| Command | Use |
+|---|---|
+| `rocq-lsp start [PROJECT]` | Start the session. Every other command needs one. |
+| `rocq-lsp goal FILE:LINE` | Proof state before and after that line, plus errors above it. |
+| `rocq-lsp goal FILE:LAST_LINE` | The same on the closing `Qed.`, which checks the whole file. |
+| `rocq-lsp goal FILE:LINE:COLUMN` | State at one point inside a line holding several tactics. |
+| `rocq-lsp outline FILE` | Imports and declarations, with the line numbers the other commands want. |
+| `rocq-lsp try FILE:LINE "  tac."` | Test replacement tactics without touching the file. |
+| `rocq-lsp run-code` | Check a self-contained snippet read from stdin. |
+| `rocq-lsp status` | Open files and how much memory they hold. |
+| `rocq-lsp close FILE` | Free one file's prover state, keeping the session. |
+| `rocq-lsp stop` | End the session and free every prover. |
+
+Use `rocq-lsp --help` or `rocq-lsp COMMAND --help` for more options.
+
 ## Setup
 
 With `vsrocqtop` and `rocq` on PATH, run from the repository root:
@@ -139,7 +156,23 @@ rocq-lsp goal lists.v:13
 
 The output now shows no goals and no `--- errors ---` section.
 
-## 6. Clean up
+## 6. Check a standalone snippet (optional)
+
+`run-code` checks a snippet without adding it to a file, inside the current
+project's load path:
+
+```sh
+echo 'Lemma add_0_r : forall n, n + 0 = n. Proof. induction n; simpl; auto. Qed.' | rocq-lsp run-code
+```
+
+```text
+The snippet checks cleanly.
+```
+
+It needs a known project; running a file command earlier in this session (as
+above) already established one. Otherwise, pass `--project`.
+
+## 7. Clean up
 
 ```sh
 rocq-lsp stop
@@ -147,5 +180,3 @@ rocq-lsp stop
 
 To release only this file while keeping the session running, use
 `rocq-lsp close lists.v` instead.
-
-Use `rocq-lsp --help` or `rocq-lsp COMMAND --help` for more options.

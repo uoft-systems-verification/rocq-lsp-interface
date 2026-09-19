@@ -1,9 +1,13 @@
 # rocq-lsp
 
 `rocq-lsp` brings [VsRocq](https://github.com/rocq-prover/vsrocq)'s persistent,
-incremental proof checking to the command line and MCP. It reuses checked
-prefixes during proof editing and exposes intermediate goals and errors without
-repeatedly compiling the whole file.
+incremental proof checking to the command line and MCP. It helps with two tasks:
+
+1. **Repeated proof debugging in the middle of a `.v` file.** Edit a tactic and
+   check again, reusing the unchanged checked prefix instead of executing it
+   from scratch on every attempt.
+2. **Inspecting proof context.** See hypotheses and goals before and after a
+   tactic, together with error locations, using `rocq-lsp goal FILE:LINE`.
 
 Each fresh `rocq compile` invocation reloads dependencies and checks the source
 from the beginning. `rocq-lsp` drives VsRocq's language server `vsrocqtop` directly
