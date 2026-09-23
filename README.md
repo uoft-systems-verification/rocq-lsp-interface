@@ -1,4 +1,4 @@
-# rocq-lsp
+# rocq-lsp-interface
 
 `rocq-lsp` brings [VsRocq](https://github.com/rocq-prover/vsrocq)'s persistent,
 incremental proof checking to the command line and MCP. It helps with two tasks:
